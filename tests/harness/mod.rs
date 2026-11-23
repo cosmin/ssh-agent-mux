@@ -89,6 +89,15 @@ impl SshPkiKeygen {
     }
 }
 
+/// Write a private key to `dir` with permissions that `ssh-add` accepts
+fn write_key_file(dir: &std::path::Path, key: impl AsRef<[u8]>) -> io::Result<PathBuf> {
+    let key_file = dir.join("key");
+    fs::write(&key_file, key.as_ref())?;
+    #[cfg(unix)]
+    fs::set_permissions(&key_file, fs::Permissions::from_mode(SSH_KEY_FILE_MODE))?;
+    Ok(key_file)
+}
+
 pub enum SshAgentType {
     OpenSsh,
     Mux,
@@ -209,6 +218,136 @@ impl SshAgentInstance {
             .map_err(|e| map_binary_notfound_error("ssh-add", e))?;
 
         Ok(())
+    }
+
+    /// Run `ssh-add` against this agent with the given arguments
+    fn ssh_add<I, A>(&self, args: I) -> io::Result<std::process::Output>
+    where
+        I: IntoIterator<Item = A>,
+        A: Into<OsString>,
+    {
+        cmd("ssh-add", args)
+            .env("SSH_AUTH_SOCK", &self.sock_path)
+            .unchecked()
+            .stdout_capture()
+            .stderr_capture()
+            .run()
+            .map_err(|e| map_binary_notfound_error("ssh-add", e))
+    }
+
+    /// Add a private key with a lifetime constraint (`ssh-add -t`), which uses
+    /// SSH_AGENTC_ADD_ID_CONSTRAINED instead of SSH_AGENTC_ADD_IDENTITY. Returns whether
+    /// `ssh-add` succeeded.
+    pub fn try_add_with_lifetime(&self, key: impl AsRef<[u8]>, seconds: u32) -> io::Result<bool> {
+        let temp_dir = tempfile::tempdir()?;
+        let key_file = write_key_file(temp_dir.path(), key)?;
+        let output = self.ssh_add([
+            OsString::from("-q"),
+            "-t".into(),
+            seconds.to_string().into(),
+            "--".into(),
+            key_file.into(),
+        ])?;
+        Ok(output.status.success())
+    }
+
+    /// Add a private key (`ssh-add`). Returns whether `ssh-add` succeeded.
+    pub fn try_add(&self, key: impl AsRef<[u8]>) -> io::Result<bool> {
+        let temp_dir = tempfile::tempdir()?;
+        let key_file = write_key_file(temp_dir.path(), key)?;
+        let output = self.ssh_add([OsString::from("-q"), "--".into(), key_file.into()])?;
+        Ok(output.status.success())
+    }
+
+    /// Remove a key by its public half (`ssh-add -d`). Returns whether `ssh-add` succeeded.
+    pub fn try_remove(&self, pubkey: &str) -> io::Result<bool> {
+        let temp_dir = tempfile::tempdir()?;
+        let pub_file = temp_dir.path().join("key.pub");
+        fs::write(&pub_file, format!("{pubkey}\n"))?;
+        let output = self.ssh_add([OsString::from("-q"), "-d".into(), pub_file.into()])?;
+        Ok(output.status.success())
+    }
+
+    /// Remove all keys (`ssh-add -D`). Returns whether `ssh-add` succeeded.
+    pub fn try_remove_all(&self) -> io::Result<bool> {
+        let output = self.ssh_add([OsString::from("-q"), "-D".into()])?;
+        Ok(output.status.success())
+    }
+
+    /// Lock the agent (`ssh-add -x`) with a fixed passphrase, supplied via SSH_ASKPASS.
+    /// A locked OpenSSH agent refuses to add keys, which stands in for agents like
+    /// Secretive and 1Password that don't accept externally-added keys.
+    pub fn lock(&self) -> io::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let askpass = temp_dir.path().join("askpass");
+        fs::write(&askpass, "#!/bin/sh\necho test-lock-passphrase\n")?;
+        #[cfg(unix)]
+        fs::set_permissions(&askpass, fs::Permissions::from_mode(0o700))?;
+        cmd!("ssh-add", "-x")
+            .env("SSH_AUTH_SOCK", &self.sock_path)
+            .env("SSH_ASKPASS", &askpass)
+            .env("SSH_ASKPASS_REQUIRE", "force")
+            .env("DISPLAY", ":0")
+            .stdin_null()
+            .stdout_null()
+            .stderr_null()
+            .run()
+            .map_err(|e| map_binary_notfound_error("ssh-add", e))?;
+        Ok(())
+    }
+
+    /// Sign data with the agent key matching `pubkey` (`ssh-keygen -Y sign`), then verify the
+    /// signature against the public key. Returns whether signing and verification succeeded.
+    pub fn sign_and_verify(&self, pubkey: &str) -> io::Result<bool> {
+        let temp_dir = tempfile::tempdir()?;
+        let pub_file = temp_dir.path().join("key.pub");
+        fs::write(&pub_file, format!("{pubkey}\n"))?;
+        let data_file = temp_dir.path().join("data");
+        fs::write(&data_file, b"ssh-agent-mux signing test")?;
+
+        let sign = cmd!(
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-n",
+            "file",
+            "-f",
+            &pub_file,
+            &data_file
+        )
+        .env("SSH_AUTH_SOCK", &self.sock_path)
+        .unchecked()
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .map_err(|e| map_binary_notfound_error("ssh-keygen", e))?;
+        if !sign.status.success() {
+            println!(
+                "`ssh-keygen -Y sign` failed:\n{}",
+                String::from_utf8_lossy(&sign.stderr)
+            );
+            return Ok(false);
+        }
+
+        let mut sig_file = data_file.clone().into_os_string();
+        sig_file.push(".sig");
+        let verify = cmd!(
+            "ssh-keygen",
+            "-Y",
+            "check-novalidate",
+            "-n",
+            "file",
+            "-s",
+            &sig_file
+        )
+        .stdin_path(&data_file)
+        .unchecked()
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .map_err(|e| map_binary_notfound_error("ssh-keygen", e))?;
+        Ok(verify.status.success())
     }
 
     pub fn list(&self) -> io::Result<Vec<String>> {

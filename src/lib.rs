@@ -9,7 +9,10 @@ use ssh_agent_lib::{
     agent::{self, Agent, ListeningSocket, Session},
     client,
     error::AgentError,
-    proto::{extension::QueryResponse, Extension, Identity, SignRequest},
+    proto::{
+        extension::QueryResponse, AddIdentity, AddIdentityConstrained, Extension, Identity,
+        RemoveIdentity, SignRequest,
+    },
     ssh_key::{public::KeyData as PubKeyData, Signature},
 };
 use tokio::{
@@ -20,8 +23,13 @@ use tokio::{
 type KnownPubKeysMap = HashMap<PubKeyData, PathBuf>;
 type KnownPubKeys = Arc<Mutex<KnownPubKeysMap>>;
 
-/// Only the `request_identities`, `sign`, and `extension` commands are implemented. For
-/// `extension`, only the `session-bind@openssh.com` and `query` extensions are supported.
+/// Implemented commands: `request_identities`, `sign`, `add_identity`,
+/// `add_identity_constrained`, `remove_identity`, `remove_all_identities`, and `extension`.
+/// For `extension`, only the `session-bind@openssh.com` and `query` extensions are supported.
+///
+/// Added identities go to the first upstream agent (in configured order) that accepts them, so
+/// list a general-purpose agent such as OpenSSH's first; agents backed by a secure enclave or
+/// password manager typically refuse externally-added keys and are skipped.
 #[ssh_agent_lib::async_trait]
 impl Session for MuxAgent {
     async fn request_identities(&mut self) -> Result<Vec<Identity>, AgentError> {
@@ -55,6 +63,81 @@ impl Session for MuxAgent {
             Err(AgentError::Other(
                 format!("No agent found for public key: {}", &fingerprint).into(),
             ))
+        }
+    }
+
+    async fn add_identity(&mut self, identity: AddIdentity) -> Result<(), AgentError> {
+        log::trace!("incoming: add_identity");
+        self.add_to_first_accepting_upstream(
+            "add_identity",
+            identity,
+            |mut client, id| async move { client.add_identity(id).await },
+        )
+        .await
+    }
+
+    async fn add_identity_constrained(
+        &mut self,
+        identity: AddIdentityConstrained,
+    ) -> Result<(), AgentError> {
+        log::trace!("incoming: add_identity_constrained");
+        self.add_to_first_accepting_upstream(
+            "add_identity_constrained",
+            identity,
+            |mut client, id| async move { client.add_identity_constrained(id).await },
+        )
+        .await
+    }
+
+    async fn remove_identity(&mut self, identity: RemoveIdentity) -> Result<(), AgentError> {
+        let fingerprint = identity
+            .credential
+            .key_data()
+            .fingerprint(Default::default());
+        log::trace!("incoming: remove_identity({})", &fingerprint);
+
+        let Some(agent_sock_path) = self
+            .get_agent_sock_for_pubkey(identity.credential.key_data())
+            .await?
+        else {
+            log::warn!("No upstream agent holds public key {}", &fingerprint);
+            return Err(AgentError::Failure);
+        };
+        log::info!(
+            "Removing key {} from upstream agent <{}>",
+            &fingerprint,
+            agent_sock_path.display()
+        );
+        let key_data = identity.credential.key_data().clone();
+        let mut client = self.connect_upstream_agent(&agent_sock_path)?;
+        client.remove_identity(identity).await?;
+        self.known_keys.lock().await.remove(&key_data);
+        Ok(())
+    }
+
+    async fn remove_all_identities(&mut self) -> Result<(), AgentError> {
+        log::trace!("incoming: remove_all_identities");
+        let mut any_succeeded = false;
+        for sock_path in &self.socket_paths {
+            let Ok(mut client) = self.connect_upstream_agent(sock_path) else {
+                continue;
+            };
+            match client.remove_all_identities().await {
+                Ok(()) => {
+                    log::info!("Removed all identities from <{}>", sock_path.display());
+                    any_succeeded = true;
+                }
+                Err(e) => log::debug!(
+                    "Upstream agent <{}> refused remove_all_identities: {}",
+                    sock_path.display(),
+                    e
+                ),
+            }
+        }
+        if any_succeeded {
+            Ok(())
+        } else {
+            Err(AgentError::Failure)
         }
     }
 
@@ -144,6 +227,51 @@ impl MuxAgent {
             known_keys: Default::default(),
         };
         agent::listen(listen_sock, this).await
+    }
+
+    /// Offer an identity to each reachable upstream agent in configured order, stopping at the
+    /// first one that accepts it. Agents that refuse (e.g. Secretive, 1Password) are skipped.
+    async fn add_to_first_accepting_upstream<T, F, Fut>(
+        &self,
+        op: &str,
+        payload: T,
+        f: F,
+    ) -> Result<(), AgentError>
+    where
+        T: Clone,
+        F: Fn(Box<dyn Session>, T) -> Fut,
+        Fut: std::future::Future<Output = Result<(), AgentError>>,
+    {
+        for sock_path in &self.socket_paths {
+            let client = match self.connect_upstream_agent(sock_path) {
+                Ok(c) => c,
+                Err(_) => {
+                    log::warn!(
+                        "Ignoring missing upstream agent socket: {}",
+                        sock_path.display()
+                    );
+                    continue;
+                }
+            };
+            match f(client, payload.clone()).await {
+                Ok(()) => {
+                    log::info!(
+                        "{} accepted by upstream agent <{}>",
+                        op,
+                        sock_path.display()
+                    );
+                    return Ok(());
+                }
+                Err(e) => log::debug!(
+                    "Upstream agent <{}> refused {}: {}",
+                    sock_path.display(),
+                    op,
+                    e
+                ),
+            }
+        }
+        log::error!("No upstream agent accepted {}", op);
+        Err(AgentError::Failure)
     }
 
     fn connect_upstream_agent(
