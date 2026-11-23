@@ -1,12 +1,12 @@
 [package]
 name = "ssh-agent-mux"
 description = "Combine keys from multiple SSH agents into a single agent socket"
-repository = "https://github.com/overhacked/ssh-agent-mux"
+repository = "https://github.com/cosmin/ssh-agent-mux"
 license = "Apache-2.0 OR BSD-3-Clause"
 keywords = ["ssh", "ssh-agent", "authentication"]
 categories = ["command-line-utilities", "network-programming"]
 exclude = [".*"]
-version = "0.2.0" # bumped by release.sh
+version = "0.3.0" # bumped by release.sh
 edition = "2021"
 rust-version = "1.91.0"
 

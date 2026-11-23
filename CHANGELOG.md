@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-22
+
+First release of the [cosmin/ssh-agent-mux](https://github.com/cosmin/ssh-agent-mux) fork.
+
+### Added
+- Proxy SSH certificates via ssh-agent-lib 0.6 `PublicCredential` (fixes upstream #56) by @sini
+- Forward `ssh-add`, `ssh-add -t`/`-c` (constrained add, fixes upstream #90), `ssh-add -d` and `ssh-add -D` to upstream agents
+- Integration tests for signing, certificates, adding and removing keys
+
+### Fixed
+- Skip upstream agents that error when listing identities by @sini
+- Refuse adding destination-constrained keys (`ssh-add -h`), which the mux can't enforce
+
+### Dependencies
+- Bump ssh-agent-lib from 0.5.1 to 0.6.0
+- Bump clap-serde-derive from 0.2.1 to 1.0.0
+- Bump flexi_logger from 0.31.7 to 0.32.0
+- Bump toml from 0.9.8 to 1.2.2
+- Bump service-manager from 0.10.0 to 0.11.0
+- Bump tokio from 1.49.0 to 1.54.1
+- Update MSRV to 1.91.0
+
 ## [0.2.0] - 2025-12-19
 
 ### Added

@@ -4,7 +4,10 @@ updates:
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: daily
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
     allow:
       # Ignore transitive dependencies, because security updates to, e.g. SSH
       # protocol, can only be addressed by upstream ssh-agent-lib
@@ -15,5 +18,8 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: daily
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
     open-pull-requests-limit: 10

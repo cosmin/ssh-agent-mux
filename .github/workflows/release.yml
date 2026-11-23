@@ -168,21 +168,6 @@ jobs:
           body: ${{ needs.changelog.outputs.release_body }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
 
-  publish-crates-io:
-    name: Publish on crates.io
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout the repository
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
-
-      - name: Publish
-        run: cargo publish --locked --token ${{ secrets.CARGO_TOKEN }}
-
   homebrew-releaser:
     name: Release to Homebrew tap
     needs: [publish-github]
@@ -191,7 +176,7 @@ jobs:
       - name: Run homebrew-releaser
         uses: Justintime50/homebrew-releaser@v3
         with:
-          homebrew_owner: overhacked
+          homebrew_owner: cosmin
           homebrew_tap: homebrew-tap
 
           version: ${{ github.ref_name }}
