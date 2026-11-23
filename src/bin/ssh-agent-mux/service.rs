@@ -84,7 +84,11 @@ pub fn handle_service_command(config: &Config) -> Result<()> {
             working_directory: None,
             environment: None,
             autostart: true,
-            restart_policy: service_manager::RestartPolicy::OnFailure { delay_secs: None },
+            restart_policy: service_manager::RestartPolicy::OnFailure {
+                delay_secs: None,
+                max_retries: None,
+                reset_after_secs: None,
+            },
         })?;
         println!("Installed service {}", SERVICE_IDENT);
     } else if config.service.restart_service {
