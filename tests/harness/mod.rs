@@ -259,6 +259,35 @@ impl SshAgentInstance {
         Ok(output.status.success())
     }
 
+    /// Add a private key restricted to `host` (`ssh-add -h`), using `host_pubkey` as that host's
+    /// key. Returns whether `ssh-add` succeeded.
+    pub fn try_add_destination_constrained(
+        &self,
+        key: impl AsRef<[u8]>,
+        host: &str,
+        host_pubkey: &str,
+    ) -> io::Result<bool> {
+        let temp_dir = tempfile::tempdir()?;
+        let key_file = write_key_file(temp_dir.path(), key)?;
+        let known_hosts = temp_dir.path().join("known_hosts");
+        fs::write(&known_hosts, format!("{host} {host_pubkey}\n"))?;
+        let output = self.ssh_add([
+            OsString::from("-q"),
+            "-H".into(),
+            known_hosts.into(),
+            "-h".into(),
+            host.into(),
+            "--".into(),
+            key_file.into(),
+        ])?;
+        println!(
+            "`ssh-add -h` output:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(output.status.success())
+    }
+
     /// Remove a key by its public half (`ssh-add -d`). Returns whether `ssh-add` succeeded.
     pub fn try_remove(&self, pubkey: &str) -> io::Result<bool> {
         let temp_dir = tempfile::tempdir()?;

@@ -288,3 +288,27 @@ fn remove_all_clears_every_accepting_upstream() -> TestResult {
 
     Ok(())
 }
+
+/// Destination-constrained keys (`ssh-add -h`) can't be enforced through the mux, so adding one
+/// must fail rather than silently store an unrestricted key. The same add made directly to the
+/// upstream agent succeeds, showing the refusal comes from the mux.
+#[test]
+fn add_destination_constrained_key_is_refused() -> TestResult {
+    let upstream = SshAgentInstance::new_openssh()?;
+    let mux_agent = mux_over(&[&upstream])?;
+
+    assert!(!mux_agent.try_add_destination_constrained(
+        keys::TEST_KEY_ED25519,
+        "example.com",
+        keys::TEST_KEY_ECDSA_PUB,
+    )?);
+    assert!(upstream.list()?.is_empty());
+
+    assert!(upstream.try_add_destination_constrained(
+        keys::TEST_KEY_ED25519,
+        "example.com",
+        keys::TEST_KEY_ECDSA_PUB,
+    )?);
+
+    Ok(())
+}

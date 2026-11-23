@@ -11,7 +11,7 @@ use ssh_agent_lib::{
     error::AgentError,
     proto::{
         extension::QueryResponse, AddIdentity, AddIdentityConstrained, Extension, Identity,
-        RemoveIdentity, SignRequest,
+        KeyConstraint, RemoveIdentity, SignRequest,
     },
     ssh_key::{public::KeyData as PubKeyData, Signature},
 };
@@ -81,6 +81,21 @@ impl Session for MuxAgent {
         identity: AddIdentityConstrained,
     ) -> Result<(), AgentError> {
         log::trace!("incoming: add_identity_constrained");
+        // Extension constraints (notably `restrict-destination-v00@openssh.com`, from `ssh-add
+        // -h`) are enforced by the upstream agent against `session-bind` state on the same
+        // connection. The mux uses a fresh upstream connection per request, so the upstream would
+        // treat every use as local and the restriction would silently not apply. Refuse rather
+        // than store a key whose constraints won't be honored.
+        if let Some(name) = identity.constraints.iter().find_map(|c| match c {
+            KeyConstraint::Extension(ext) => Some(ext.name.clone()),
+            _ => None,
+        }) {
+            log::error!(
+                "Refusing to add key with unsupported constraint extension {name}; \
+                 add it directly to an upstream agent instead"
+            );
+            return Err(AgentError::Failure);
+        }
         self.add_to_first_accepting_upstream(
             "add_identity_constrained",
             identity,
