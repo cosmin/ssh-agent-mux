@@ -51,12 +51,10 @@ jobs:
           os: ubuntu-latest
           rust: nightly
           target: x86_64-unknown-linux-musl
-          strip: x86_64-linux-musl-strip
         - build: linux-arm64
           os: ubuntu-latest
           rust: stable
           target: aarch64-unknown-linux-gnu
-          strip: aarch64-linux-gnu-strip
           qemu: qemu-aarch64
         - build: darwin-amd64
           os: macos-latest
@@ -70,7 +68,6 @@ jobs:
           os: ubuntu-latest
           rust: nightly
           target: x86_64-unknown-freebsd
-          strip: x86_64-unknown-freebsd13-strip
 
     steps:
       - name: Checkout the repository
@@ -124,21 +121,6 @@ jobs:
           ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
           bin="target/${{ matrix.target }}/release/ssh-agent-mux"
           echo "BIN=$bin" >> $GITHUB_ENV
-
-      - name: Strip release binary (macOS)
-        if: matrix.os == 'macos-latest'
-        shell: bash
-        run: strip "$BIN"
-
-      - name: Strip release binary (cross)
-        if: env.CARGO == 'cross'
-        shell: bash
-        run: |
-          docker run --rm -v \
-            "$PWD/target:/target:Z" \
-            "ghcr.io/cross-rs/${{ matrix.target }}:main" \
-            "${{ matrix.strip }}" \
-            "/$BIN"
 
       - name: Determine archive name
         shell: bash
