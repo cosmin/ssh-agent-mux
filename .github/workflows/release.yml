@@ -28,6 +28,8 @@ jobs:
   publish-github:
     name: Publish on GitHub
     needs: [changelog]
+    permissions:
+      contents: write
     runs-on: ${{ matrix.os }}
     env:
       # For some builds, we use cross to test on 32-bit and big-endian
