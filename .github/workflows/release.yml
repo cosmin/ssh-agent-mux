@@ -58,6 +58,41 @@ jobs:
             exit 1
           fi
 
+      - name: Check Homebrew tap token can push to the tap
+        # Secrets aren't available to pull requests from forks, so only check on main and tags.
+        # On tags this fails the run before anything is published, so a bad or expired token
+        # can't leave a GitHub release published without its Homebrew formula update.
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          TAP_REPO: cosmin/homebrew-tap
+        run: |
+          problem() {
+            if [ "$IS_RELEASE" = "true" ]; then
+              echo "::error::$1"
+              exit 1
+            fi
+            echo "::warning::$1 (a release from this commit would fail at preflight)"
+            exit 0
+          }
+          if [ -z "$TAP_TOKEN" ]; then
+            problem "TAP_TOKEN secret is not set"
+          fi
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 -w0)"
+          tap_dir="$RUNNER_TEMP/tap"
+          if ! git -c http.extraheader="$auth_header" clone --quiet --depth 1 \
+              "https://github.com/$TAP_REPO.git" "$tap_dir"; then
+            problem "TAP_TOKEN cannot read $TAP_REPO (expired, revoked, or missing repo access?)"
+          fi
+          # A dry-run push requests the receive-pack endpoint, which GitHub only grants with
+          # write access, without changing anything in the tap.
+          if ! git -C "$tap_dir" -c http.extraheader="$auth_header" push --dry-run --quiet \
+              origin HEAD:refs/heads/main; then
+            problem "TAP_TOKEN cannot push to $TAP_REPO (needs Contents: Read and write)"
+          fi
+          echo "TAP_TOKEN can push to $TAP_REPO"
+
       - name: Check release does not already exist
         if: env.IS_RELEASE == 'true'
         shell: bash
