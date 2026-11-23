@@ -101,5 +101,5 @@ topo_order = false
 sort_commits = "newest"
 
 [remote.github]
-owner = "overhacked"
+owner = "cosmin"
 repo = "ssh-agent-mux"
